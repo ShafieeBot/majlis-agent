@@ -4,7 +4,7 @@
   "description": "Majlis AI agent service — Express server + cron scheduler for the VPS",
   "scripts": {
     "dev": "tsx watch --env-file=.env src/index.ts",
-    "build": "tsc",
+    "build": "tsc && tsc-alias",
     "start": "node --env-file=.env dist/index.js",
     "typecheck": "tsc --noEmit"
   },
@@ -19,6 +19,7 @@
     "@types/express": "^5.0.0",
     "@types/node": "^22.0.0",
     "@types/node-cron": "^3.0.11",
+    "tsc-alias": "^1.8.16",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3"
   }
