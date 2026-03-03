@@ -30,8 +30,8 @@ function getAdapter(channel: string = 'telegram'): ChannelAdapter {
       break;
     }
     case 'whatsapp': {
-      const { WhatsAppAdapter } = require('./whatsapp');
-      adapter = new WhatsAppAdapter();
+      const { createWhatsAppAdapter } = require('./whatsapp');
+      adapter = createWhatsAppAdapter();
       break;
     }
     default:

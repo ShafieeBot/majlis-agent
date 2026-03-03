@@ -1,7 +1,7 @@
 /**
  * Agent Express Server
  *
- * Receives Telegram updates forwarded by the Next.js app proxy.
+ * Receives Telegram and WhatsApp updates forwarded by the Next.js app proxy.
  * Exposes /admin/* routes for the admin panel to read conversations.
  */
 
@@ -52,23 +52,17 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true, ts: new Date().toISOString() });
 });
 
-// ── Telegram update receiver ──────────────────────────────────────────────────
+// ── Channel update processor (shared by Telegram + WhatsApp) ─────────────────
 
-app.post('/telegram', requireSecret, (req, res) => {
-  res.json({ ok: true });
+type Channel = 'telegram' | 'whatsapp';
 
-  processTelegramUpdate(req.body).catch((err) => {
-    console.error('[Agent] Unhandled error in processTelegramUpdate:', err);
-  });
-});
-
-async function processTelegramUpdate(rawPayload: unknown) {
-  const msg = parseInbound(rawPayload as Record<string, unknown>, 'telegram');
+async function processChannelUpdate(rawPayload: unknown, channel: Channel) {
+  const msg = parseInbound(rawPayload as Record<string, unknown>, channel);
   if (!msg) return;
 
   if (isRateLimited(msg.chatId)) {
     await sendMessage({
-      channel: 'telegram',
+      channel,
       chatId: msg.chatId,
       text: 'Anda telah menghantar terlalu banyak mesej. Sila cuba lagi kemudian. 🙏',
     });
@@ -80,7 +74,7 @@ async function processTelegramUpdate(rawPayload: unknown) {
   if (!routerResult.resolved) {
     if (routerResult.replyText) {
       await sendMessage({
-        channel: 'telegram',
+        channel,
         chatId: msg.chatId,
         text: routerResult.replyText,
       });
@@ -91,7 +85,7 @@ async function processTelegramUpdate(rawPayload: unknown) {
         .prepare<[string, string], { id: string }>(
           'SELECT id FROM conversations WHERE channel = ? AND chat_id = ?',
         )
-        .get('telegram', msg.chatId);
+        .get(channel, msg.chatId);
 
       if (conv) {
         const now = new Date().toISOString();
@@ -116,6 +110,26 @@ async function processTelegramUpdate(rawPayload: unknown) {
 
   await handleIncomingMessage(routerResult.context!, msg);
 }
+
+// ── Telegram update receiver ──────────────────────────────────────────────────
+
+app.post('/telegram', requireSecret, (req, res) => {
+  res.json({ ok: true });
+
+  processChannelUpdate(req.body, 'telegram').catch((err) => {
+    console.error('[Agent] Unhandled error in processChannelUpdate (telegram):', err);
+  });
+});
+
+// ── WhatsApp update receiver ─────────────────────────────────────────────────
+
+app.post('/whatsapp', requireSecret, (req, res) => {
+  res.json({ ok: true });
+
+  processChannelUpdate(req.body, 'whatsapp').catch((err) => {
+    console.error('[Agent] Unhandled error in processChannelUpdate (whatsapp):', err);
+  });
+});
 
 // ── Admin routes (require x-agent-secret) ─────────────────────────────────────
 
@@ -202,7 +216,7 @@ app.post('/admin/conversations/:id/reply', requireSecret, async (req, res) => {
 
   try {
     const result = await sendMessage({
-      channel: conv.channel as 'telegram',
+      channel: conv.channel as Channel,
       chatId: conv.chat_id,
       text: content,
     });
@@ -268,7 +282,7 @@ app.post('/admin/send', requireSecret, async (req, res) => {
 
   try {
     const result = await sendMessage({
-      channel: channel as 'telegram',
+      channel: channel as Channel,
       chatId: resolvedChatId!,
       text: content,
     });
