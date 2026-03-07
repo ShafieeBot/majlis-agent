@@ -83,13 +83,13 @@ export interface AgentPolicyRecord {
 
 export type TicketType =
   | 'EXTRA_PAX'
-  | 'DIETARY'
-  | 'PLUS_ONE'
-  | 'SCHEDULE_CHANGE'
-  | 'TRANSPORT'
-  | 'ACCOMMODATION'
-  | 'GENERAL'
-  | 'OTHER';
+  | 'RSVP_CHANGE_REQUEST'
+  | 'DIETARY_CHANGE'
+  | 'UNKNOWN_SENDER'
+  | 'COMPLAINT'
+  | 'GENERAL_INQUIRY'
+  | 'ESCALATION'
+  | 'SYSTEM_ERROR';
 
 export type TicketStatus =
   | 'OPEN'

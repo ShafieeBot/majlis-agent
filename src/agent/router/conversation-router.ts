@@ -319,7 +319,7 @@ async function handleNoPin(
     await createTicket({
       weddingId: conversation.wedding_id,
       conversationId: conversation.id,
-      type: 'OTHER',
+      type: 'UNKNOWN_SENDER',
       details: {
         description: `Guest could not be identified via PIN. Sender: ${msg.senderName ?? 'Unknown'} (chat_id: ${msg.chatId})`,
         sender_name: msg.senderName,

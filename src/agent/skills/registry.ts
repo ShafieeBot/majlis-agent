@@ -67,7 +67,7 @@ const createExceptionTicket: ToolDefinition = {
     'Log a question or issue for the hosts to follow up on. Use when the guest asks something you cannot answer (e.g. whether they are invited to a specific event, parking details, dress code specifics), has a complaint, or needs a human response. After calling this tool, always tell the guest warmly that their question has been noted and the hosts will get back to them personally.',
   inputSchema: z.object({
     type: z
-      .enum(['EXTRA_PAX', 'DIETARY', 'PLUS_ONE', 'SCHEDULE_CHANGE', 'TRANSPORT', 'ACCOMMODATION', 'GENERAL', 'OTHER'])
+      .enum(['EXTRA_PAX', 'RSVP_CHANGE_REQUEST', 'DIETARY_CHANGE', 'UNKNOWN_SENDER', 'COMPLAINT', 'GENERAL_INQUIRY', 'ESCALATION', 'SYSTEM_ERROR'])
       .describe('The type of exception'),
     details: z
       .string()
