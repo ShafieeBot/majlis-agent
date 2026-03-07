@@ -16,7 +16,7 @@
 
 import { randomUUID } from 'crypto';
 import { getDb } from '@/lib/db';
-import { lookupByHash, lookupByPhone, listWeddings, createTicket } from '@/lib/api-client';
+import { lookupByHash, lookupByPhone, listWeddings, createTicket, syncConversation } from '@/lib/api-client';
 import { hashRefCode, isValidRefCode, hashChatPin } from './ref-code';
 import type { NormalisedInboundMessage } from '../gateway/types';
 import type { ConversationRecord, RoutedContext, RoutingState } from '../types';
@@ -393,6 +393,8 @@ function upsertConversation(
   const db = getDb();
   const now = new Date().toISOString();
 
+  let conv: ConversationRecord;
+
   if (existing) {
     db.prepare(`
       UPDATE conversations SET
@@ -419,33 +421,51 @@ function upsertConversation(
       existing.id,
     );
 
-    return parseRow(
+    conv = parseRow(
       db.prepare<string, Record<string, unknown>>('SELECT * FROM conversations WHERE id = ?').get(existing.id)!,
+    );
+  } else {
+    const id = randomUUID();
+    db.prepare(`
+      INSERT INTO conversations
+        (id, channel, chat_id, sender_id, sender_name, routing_state, wedding_id, invite_group_id, pin_attempts, metadata, last_message_at, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      msg.channel,
+      msg.chatId,
+      msg.senderId || null,
+      msg.senderName || null,
+      updates.routing_state ?? 'UNKNOWN',
+      updates.wedding_id ?? null,
+      updates.invite_group_id ?? null,
+      updates.pin_attempts ?? 0,
+      JSON.stringify(updates.metadata ?? {}),
+      now,
+      now,
+      now,
+    );
+
+    conv = parseRow(
+      db.prepare<string, Record<string, unknown>>('SELECT * FROM conversations WHERE id = ?').get(id)!,
     );
   }
 
-  const id = randomUUID();
-  db.prepare(`
-    INSERT INTO conversations
-      (id, channel, chat_id, sender_id, sender_name, routing_state, wedding_id, invite_group_id, pin_attempts, metadata, last_message_at, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    id,
-    msg.channel,
-    msg.chatId,
-    msg.senderId || null,
-    msg.senderName || null,
-    updates.routing_state ?? 'UNKNOWN',
-    updates.wedding_id ?? null,
-    updates.invite_group_id ?? null,
-    updates.pin_attempts ?? 0,
-    JSON.stringify(updates.metadata ?? {}),
-    now,
-    now,
-    now,
-  );
+  // Fire-and-forget sync to Supabase (non-blocking)
+  syncConversation({
+    id: conv.id,
+    channel: conv.channel,
+    chatId: conv.chat_id,
+    senderId: conv.sender_id,
+    senderName: conv.sender_name,
+    routingState: conv.routing_state,
+    weddingId: conv.wedding_id,
+    inviteGroupId: conv.invite_group_id,
+    metadata: (conv.metadata as Record<string, unknown>) ?? {},
+    lastMessageAt: conv.last_message_at,
+  }).catch((err) => {
+    console.warn('[Router] Conversation sync to Supabase failed (non-fatal):', err);
+  });
 
-  return parseRow(
-    db.prepare<string, Record<string, unknown>>('SELECT * FROM conversations WHERE id = ?').get(id)!,
-  );
+  return conv;
 }

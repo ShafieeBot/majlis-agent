@@ -164,6 +164,25 @@ export async function createTicket(payload: CreateTicketPayload): Promise<{ tick
   return apiRequest<{ ticketId: string }>('POST', '/api/agent/tickets', payload);
 }
 
+// ── Conversation Sync ─────────────────────────────────────────────────────────
+
+export interface SyncConversationPayload {
+  id: string;
+  channel: string;
+  chatId: string;
+  senderId: string | null;
+  senderName: string | null;
+  routingState: string;
+  weddingId: string | null;
+  inviteGroupId: string | null;
+  metadata: Record<string, unknown>;
+  lastMessageAt: string;
+}
+
+export async function syncConversation(payload: SyncConversationPayload): Promise<void> {
+  await apiRequest<{ conversationId: string }>('POST', '/api/agent/conversations', payload);
+}
+
 // ── Heartbeat ──────────────────────────────────────────────────────────────────
 
 export interface StaleTicket {
