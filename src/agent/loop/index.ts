@@ -48,7 +48,7 @@ export async function agentLoop(
         weddingId,
         conversationId: toolContext.conversationId,
         inviteGroupId: toolContext.inviteGroupId || null,
-        type: 'SYSTEM_ERROR',
+        type: 'OTHER',
         details: { error: String(err), iteration },
       }).catch((ticketErr) => console.error('Failed to create system error ticket:', ticketErr));
 
