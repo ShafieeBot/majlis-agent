@@ -112,6 +112,17 @@ export async function lookupByHash(
   return res.json() as Promise<LookupResult>;
 }
 
+export async function lookupByPhone(phone: string): Promise<LookupResult[]> {
+  const params = new URLSearchParams({ type: 'phone', phone });
+  const res = await fetch(
+    `${getBaseUrl()}/api/agent/context/lookup?${params}`,
+    { headers: { 'x-agent-secret': getSecret() } },
+  );
+  if (!res.ok) throw new Error(`phone lookup failed: ${res.status}`);
+  const data = (await res.json()) as { matches: LookupResult[] };
+  return data.matches;
+}
+
 export async function listWeddings(): Promise<{ id: string; title: string }[]> {
   return apiRequest<{ id: string; title: string }[]>('GET', '/api/agent/context/weddings');
 }

@@ -16,7 +16,7 @@
 
 import { randomUUID } from 'crypto';
 import { getDb } from '@/lib/db';
-import { lookupByHash, listWeddings, createTicket } from '@/lib/api-client';
+import { lookupByHash, lookupByPhone, listWeddings, createTicket } from '@/lib/api-client';
 import { hashRefCode, isValidRefCode, hashChatPin } from './ref-code';
 import type { NormalisedInboundMessage } from '../gateway/types';
 import type { ConversationRecord, RoutedContext, RoutingState } from '../types';
@@ -118,12 +118,80 @@ async function handleRefCodeStart(
   };
 }
 
-// ── Step 1: New/unknown guest → ask for PIN ───────────────────────────────────
+// ── Step 1: New/unknown guest → phone lookup (WhatsApp) or ask for PIN ──────
 
 async function handleUnknown(
   msg: NormalisedInboundMessage,
   existing: ConversationRecord | null,
 ): Promise<RouterResult> {
+  // WhatsApp: try to resolve by phone number first (chatId = phone number)
+  if (msg.channel === 'whatsapp') {
+    try {
+      const phoneMatches = await lookupByPhone(msg.chatId);
+
+      if (phoneMatches.length === 1) {
+        // Single match → resolve immediately, no PIN needed
+        const match = phoneMatches[0];
+        const conv = upsertConversation(msg, existing, {
+          routing_state: 'RESOLVED' as RoutingState,
+          wedding_id: match.weddingId,
+          invite_group_id: match.inviteGroupId,
+        });
+        return {
+          resolved: true,
+          context: { conversation: conv, weddingId: match.weddingId, inviteGroupId: match.inviteGroupId },
+        };
+      }
+
+      if (phoneMatches.length > 1) {
+        // Multiple matches → show only matched weddings, skip PIN after selection
+        const weddings = await listWeddings();
+        const matchedWeddings = phoneMatches
+          .map((m) => {
+            const w = weddings.find((w) => w.id === m.weddingId);
+            return w ? { ...w, inviteGroupId: m.inviteGroupId } : null;
+          })
+          .filter(Boolean) as Array<{ id: string; title: string; inviteGroupId: string }>;
+
+        if (matchedWeddings.length === 1) {
+          // After filtering, only one active wedding remains
+          const match = phoneMatches.find((m) => m.weddingId === matchedWeddings[0].id)!;
+          const conv = upsertConversation(msg, existing, {
+            routing_state: 'RESOLVED' as RoutingState,
+            wedding_id: match.weddingId,
+            invite_group_id: match.inviteGroupId,
+          });
+          return {
+            resolved: true,
+            context: { conversation: conv, weddingId: match.weddingId, inviteGroupId: match.inviteGroupId },
+          };
+        }
+
+        if (matchedWeddings.length > 1) {
+          const options = matchedWeddings.map((w, i) => `${i + 1}. ${w.title}`).join('\n');
+          upsertConversation(msg, existing, {
+            routing_state: 'AWAITING_SELECTION' as RoutingState,
+            metadata: {
+              wedding_options: matchedWeddings.map((w) => w.id),
+              phone_matches: matchedWeddings.map((w) => ({
+                weddingId: w.id,
+                inviteGroupId: w.inviteGroupId,
+              })),
+            },
+          });
+          return {
+            resolved: false,
+            replyText: `Assalamualaikum! 👋 Majlis yang mana satu?\n\n${options}`,
+          };
+        }
+      }
+    } catch (err) {
+      // Phone lookup failed — fall through to standard flow
+      console.error('[Router] Phone lookup failed, falling back to PIN flow:', err);
+    }
+  }
+
+  // Standard flow: list all weddings and ask for PIN
   const weddings = await listWeddings();
 
   if (!weddings || weddings.length === 0) {
@@ -284,6 +352,25 @@ async function handleAwaitingSelection(
     return { resolved: false, replyText: `Sila pilih nombor antara 1 hingga ${options.length}.` };
   }
 
+  // Phone-matched selection: resolve directly without PIN
+  const phoneMatches = (conversation.metadata as Record<string, unknown>)?.phone_matches as
+    | Array<{ weddingId: string; inviteGroupId: string }>
+    | undefined;
+
+  if (phoneMatches && phoneMatches[num - 1]) {
+    const match = phoneMatches[num - 1];
+    const conv = upsertConversation(msg, conversation, {
+      routing_state: 'RESOLVED' as RoutingState,
+      wedding_id: match.weddingId,
+      invite_group_id: match.inviteGroupId,
+    });
+    return {
+      resolved: true,
+      context: { conversation: conv, weddingId: match.weddingId, inviteGroupId: match.inviteGroupId },
+    };
+  }
+
+  // Standard flow: ask for PIN after selection
   const weddingId = options[num - 1];
   upsertConversation(msg, conversation, {
     routing_state: 'AWAITING_CODE' as RoutingState,
