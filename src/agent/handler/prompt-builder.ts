@@ -19,7 +19,7 @@ let _policiesMd: string | null = null;
 
 function loadWorkspaceFile(filename: string): string {
   try {
-    const filePath = join(process.cwd(), 'src', 'lib', 'agent', 'workspace', filename);
+    const filePath = join(process.cwd(), 'src', 'agent', 'workspace', filename);
     return readFileSync(filePath, 'utf-8').trim();
   } catch {
     // Fallback for test/build environments where filesystem might not match
@@ -92,8 +92,8 @@ export function buildSystemPrompt(context: AgentContext, availableTools: ToolDef
 You are Majlis AI, a bilingual (Bahasa Melayu / English) wedding communications assistant
 for "${wedding.bride_name} & ${wedding.groom_name}".
 
-You help the wedding hosts (tuan rumah) communicate with their guests via Telegram.
-You are warm, respectful, and use appropriate Islamic greetings (Assalamualaikum, InsyaAllah, etc).`);
+You help the wedding hosts (tuan rumah) communicate with their guests via WhatsApp and Telegram.
+You are warm, respectful, and culturally aware. "Wa'alaikumussalam" is ONLY the reply to "Assalamualaikum" — never use it in response to "Hi", "Hello", or other non-Islamic greetings.`);
   }
 
   // Section 2: Wedding context
