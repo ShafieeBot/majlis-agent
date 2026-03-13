@@ -8,6 +8,7 @@
 import { z } from 'zod';
 import { upsertRsvp, createTicket, submitMemory } from '@/lib/api-client';
 import { createNote } from '../memory/notes-manager';
+import { retrievePendingMedia } from '../gateway/pending-media-store';
 import type { ToolDefinition, ToolContext } from './types';
 
 // ── READ Tools ──
@@ -171,21 +172,24 @@ const saveAgentNote: ToolDefinition = {
 const submitPhoto: ToolDefinition = {
   name: 'submit_photo',
   description:
-    'Submit the photo the guest just sent as a memory for the wedding. Only call this when the guest has sent a photo and you want to save it to the memories gallery. The photo is automatically taken from the current message — you do not need to provide it.',
+    'Submit a photo from the guest as a memory for the wedding gallery. Call this when the guest sends a photo to save, or when they confirm a previously sent photo should be saved. The photo is taken from the current message or from a recently sent photo in the conversation.',
   inputSchema: z.object({}),
   sideEffect: 'write',
   requiresScope: { weddingId: true, inviteGroupId: true },
   async execute(_input: unknown, ctx: ToolContext) {
     if (!ctx.inviteGroupId) return { error: 'No invite group in context' };
-    if (!ctx.pendingMedia) return { error: 'No photo attached to current message' };
+
+    // Try current message media first, then check pending store
+    const media = ctx.pendingMedia ?? retrievePendingMedia(ctx.conversationId);
+    if (!media) return { error: 'No photo available. The guest may need to resend the photo.' };
 
     const result = await submitMemory({
       weddingId: ctx.weddingId,
       inviteGroupId: ctx.inviteGroupId,
       photo: {
-        buffer: ctx.pendingMedia.buffer,
-        mimeType: ctx.pendingMedia.mimeType,
-        filename: ctx.pendingMedia.filename,
+        buffer: media.buffer,
+        mimeType: media.mimeType,
+        filename: media.filename,
       },
     });
 

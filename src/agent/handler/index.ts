@@ -23,6 +23,7 @@ import { loadAgentContext } from '../memory/context-loader';
 import { ALL_TOOLS } from '../skills/registry';
 import { resolveAvailableTools } from '../skills/policy';
 import { sendMessage, resolveMedia } from '../gateway';
+import { storePendingMedia } from '../gateway/pending-media-store';
 import type { RoutedContext, ChatMessage, AgentContext, MessageIntent, ContentBlock } from '../types';
 import type { ToolContext } from '../skills/types';
 import type { NormalisedInboundMessage } from '../gateway/types';
@@ -65,6 +66,11 @@ export async function handleIncomingMessage(
 
   // Step 1b: Resolve pending media downloads (e.g., WhatsApp images)
   const resolved = await resolveMedia(msg);
+
+  // Store media for later retrieval if the agent asks before saving
+  if (resolved.media) {
+    storePendingMedia(conversation.id, resolved.media);
+  }
 
   // Step 2: Load full context
   let context: AgentContext;
