@@ -168,9 +168,21 @@ export interface ToolCall {
   };
 }
 
+export type ImageContentBlock = {
+  type: 'image';
+  source: { type: 'base64'; media_type: string; data: string };
+};
+
+export type TextContentBlock = {
+  type: 'text';
+  text: string;
+};
+
+export type ContentBlock = TextContentBlock | ImageContentBlock;
+
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string | null;
+  content: string | ContentBlock[] | null;
   tool_calls?: ToolCall[];
   tool_call_id?: string;
 }

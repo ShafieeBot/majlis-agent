@@ -204,12 +204,14 @@ async function callOpenAI(
 
 /**
  * Convert ChatMessage[] to Anthropic message format.
+ * Handles multimodal content (text + images) by passing content block arrays directly.
  */
 function convertToAnthropicMessages(messages: ChatMessage[]): unknown[] {
   const result: unknown[] = [];
 
   for (const msg of messages) {
     if (msg.role === 'user') {
+      // If content is an array (multimodal: text + images), pass directly to Anthropic
       result.push({ role: 'user', content: msg.content });
     } else if (msg.role === 'assistant') {
       if (msg.tool_calls && msg.tool_calls.length > 0) {

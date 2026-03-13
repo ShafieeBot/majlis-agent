@@ -23,7 +23,7 @@ import { loadAgentContext } from '../memory/context-loader';
 import { ALL_TOOLS } from '../skills/registry';
 import { resolveAvailableTools } from '../skills/policy';
 import { sendMessage, resolveMedia } from '../gateway';
-import type { RoutedContext, ChatMessage, AgentContext, MessageIntent } from '../types';
+import type { RoutedContext, ChatMessage, AgentContext, MessageIntent, ContentBlock } from '../types';
 import type { ToolContext } from '../skills/types';
 import type { NormalisedInboundMessage } from '../gateway/types';
 
@@ -104,11 +104,24 @@ export async function handleIncomingMessage(
 
   // Add current message (with media context if present)
   if (resolved.media) {
-    const caption = resolved.media.caption ? `Caption: "${resolved.media.caption}"` : 'No caption provided.';
-    messages.push({
-      role: 'user',
-      content: `[Guest sent a photo. ${caption}]\n\n${resolved.media.caption || ''}`.trim(),
-    });
+    const contentBlocks: ContentBlock[] = [
+      {
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: resolved.media.mimeType,
+          data: resolved.media.buffer.toString('base64'),
+        },
+      },
+    ];
+
+    if (resolved.media.caption) {
+      contentBlocks.push({ type: 'text', text: resolved.media.caption });
+    } else {
+      contentBlocks.push({ type: 'text', text: '[Guest sent this photo with no caption]' });
+    }
+
+    messages.push({ role: 'user', content: contentBlocks });
   } else {
     messages.push({ role: 'user', content: msg.text });
   }
