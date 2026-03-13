@@ -2,24 +2,20 @@
  * Conversation Router — State machine that resolves which wedding + invite group
  * a conversation belongs to. Runs BEFORE the agent runner.
  *
- * Identification flow for unknown guests:
- *   1. UNKNOWN → ask for 4-digit chat PIN (shown on invite card) → AWAITING_CODE
- *   2. AWAITING_CODE → hash PIN, match via majlis API → RESOLVED
- *                   → no match → retry once, then graceful "we'll let the host know"
- *
- * Guests can also tap the Telegram deep-link button (/start MJLS_XXXX) which
- * resolves immediately without typing anything.
- *
- * Pre-Resolution Firewall: If routing_state !== RESOLVED, the agent runner
- * is NEVER invoked.
+ * GAP-A4 CLOSED: Global PIN brute-force rate limiting via pin_attempts table.
+ * GAP-R2 CLOSED: Supabase sync with retry via withRetry.
  */
 
 import { randomUUID } from 'crypto';
 import { getDb } from '@/lib/db';
 import { lookupByHash, lookupByPhone, listWeddings, createTicket, syncConversation } from '@/lib/api-client';
 import { hashRefCode, isValidRefCode, hashChatPin } from './ref-code';
+import { withRetry, isRetryableHttpError } from '@/lib/retry';
+import { createModuleLogger } from '@/lib/logger';
 import type { NormalisedInboundMessage } from '../gateway/types';
 import type { ConversationRecord, RoutedContext, RoutingState } from '../types';
+
+const log = createModuleLogger('router');
 
 export interface RouterResult {
   resolved: boolean;
@@ -29,10 +25,55 @@ export interface RouterResult {
 
 // Parse a raw SQLite row into ConversationRecord (metadata is stored as a JSON string)
 function parseRow(row: Record<string, unknown>): ConversationRecord {
-  return {
-    ...row,
-    metadata: typeof row.metadata === 'string' ? JSON.parse(row.metadata) : (row.metadata ?? null),
-  } as ConversationRecord;
+  let metadata: Record<string, unknown> | null = null;
+  if (typeof row.metadata === 'string') {
+    try {
+      metadata = JSON.parse(row.metadata);
+    } catch {
+      metadata = null;
+    }
+  } else {
+    metadata = (row.metadata as Record<string, unknown>) ?? null;
+  }
+  return { ...row, metadata } as ConversationRecord;
+}
+
+// ── GAP-A4 CLOSED: Global PIN brute-force rate limiting ──────────────────────
+
+const PIN_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+const PIN_RATE_LIMIT_MAX = 10; // max 10 attempts per identifier per window
+
+/**
+ * Check if a chat has exceeded the global PIN attempt rate limit.
+ * Uses the pin_attempts table in SQLite rather than in-memory state.
+ */
+export function isPinRateLimited(identifier: string): boolean {
+  const db = getDb();
+  const windowStart = new Date(Date.now() - PIN_RATE_LIMIT_WINDOW_MS).toISOString();
+
+  const row = db
+    .prepare<[string, string], { count: number }>(
+      'SELECT COUNT(*) as count FROM pin_attempts WHERE identifier = ? AND attempted_at > ?',
+    )
+    .get(identifier, windowStart);
+
+  return (row?.count ?? 0) >= PIN_RATE_LIMIT_MAX;
+}
+
+/**
+ * Record a PIN attempt for rate limiting.
+ */
+export function recordPinAttempt(identifier: string): void {
+  const db = getDb();
+  db.prepare('INSERT INTO pin_attempts (id, identifier, attempted_at) VALUES (?, ?, ?)').run(
+    randomUUID(),
+    identifier,
+    new Date().toISOString(),
+  );
+
+  // Cleanup old entries (older than 1 hour)
+  const cutoff = new Date(Date.now() - 3_600_000).toISOString();
+  db.prepare('DELETE FROM pin_attempts WHERE attempted_at < ?').run(cutoff);
 }
 
 // ── Main entry point ──────────────────────────────────────────────────────────
@@ -130,7 +171,6 @@ async function handleUnknown(
       const phoneMatches = await lookupByPhone(msg.chatId);
 
       if (phoneMatches.length === 1) {
-        // Single match → resolve immediately, no PIN needed
         const match = phoneMatches[0];
         const conv = upsertConversation(msg, existing, {
           routing_state: 'RESOLVED' as RoutingState,
@@ -144,7 +184,6 @@ async function handleUnknown(
       }
 
       if (phoneMatches.length > 1) {
-        // Multiple matches → show only matched weddings, skip PIN after selection
         const weddings = await listWeddings();
         const matchedWeddings = phoneMatches
           .map((m) => {
@@ -154,7 +193,6 @@ async function handleUnknown(
           .filter(Boolean) as Array<{ id: string; title: string; inviteGroupId: string }>;
 
         if (matchedWeddings.length === 1) {
-          // After filtering, only one active wedding remains
           const match = phoneMatches.find((m) => m.weddingId === matchedWeddings[0].id)!;
           const conv = upsertConversation(msg, existing, {
             routing_state: 'RESOLVED' as RoutingState,
@@ -186,8 +224,7 @@ async function handleUnknown(
         }
       }
     } catch (err) {
-      // Phone lookup failed — fall through to standard flow
-      console.error('[Router] Phone lookup failed, falling back to PIN flow:', err);
+      log.warn({ err }, 'Phone lookup failed, falling back to PIN flow');
     }
   }
 
@@ -198,7 +235,6 @@ async function handleUnknown(
     return { resolved: false, replyText: 'Maaf, tiada majlis aktif pada masa ini.' };
   }
 
-  // Multiple weddings — ask guest to pick one, then ask for PIN
   if (weddings.length > 1) {
     const options = weddings.map((w, i) => `${i + 1}. ${w.title}`).join('\n');
     upsertConversation(msg, existing, {
@@ -232,6 +268,14 @@ async function handleAwaitingCode(
   conversation: ConversationRecord,
 ): Promise<RouterResult> {
   const text = msg.text.trim();
+
+  // GAP-A4: Check global PIN rate limit before processing
+  if (isPinRateLimited(msg.chatId)) {
+    return {
+      resolved: false,
+      replyText: 'Terlalu banyak percubaan PIN. Sila tunggu beberapa minit sebelum mencuba lagi. 🙏',
+    };
+  }
 
   // Guest says they don't have a PIN
   if (/^(tiada|tak ada|no|none|dont have|don'?t have|x ada|xde|tidak)/i.test(text)) {
@@ -271,20 +315,20 @@ async function handleAwaitingCode(
     };
   }
 
+  // GAP-A4: Record this PIN attempt
+  recordPinAttempt(msg.chatId);
+
   // Hash and look up via majlis API
   const pinHash = hashChatPin(digits);
   const result = await lookupByHash('pin', pinHash);
 
   if (!result) {
-    // Wrong PIN — check how many attempts have been made
     const attempts = conversation.pin_attempts ?? 0;
 
     if (attempts >= 1) {
-      // Second failure → graceful fallback
       return handleNoPin(msg, conversation);
     }
 
-    // First failure → let them try once more
     upsertConversation(msg, conversation, { pin_attempts: attempts + 1 });
     return {
       resolved: false,
@@ -370,7 +414,6 @@ async function handleAwaitingSelection(
     };
   }
 
-  // Standard flow: ask for PIN after selection
   const weddingId = options[num - 1];
   upsertConversation(msg, conversation, {
     routing_state: 'AWAITING_CODE' as RoutingState,
@@ -451,20 +494,24 @@ function upsertConversation(
     );
   }
 
-  // Fire-and-forget sync to Supabase (non-blocking)
-  syncConversation({
-    id: conv.id,
-    channel: conv.channel,
-    chatId: conv.chat_id,
-    senderId: conv.sender_id,
-    senderName: conv.sender_name,
-    routingState: conv.routing_state,
-    weddingId: conv.wedding_id,
-    inviteGroupId: conv.invite_group_id,
-    metadata: (conv.metadata as Record<string, unknown>) ?? {},
-    lastMessageAt: conv.last_message_at,
-  }).catch((err) => {
-    console.warn('[Router] Conversation sync to Supabase failed (non-fatal):', err);
+  // GAP-R2 CLOSED: Sync to Supabase with retry (fire-and-forget but with backoff)
+  withRetry(
+    () =>
+      syncConversation({
+        id: conv.id,
+        channel: conv.channel,
+        chatId: conv.chat_id,
+        senderId: conv.sender_id,
+        senderName: conv.sender_name,
+        routingState: conv.routing_state,
+        weddingId: conv.wedding_id,
+        inviteGroupId: conv.invite_group_id,
+        metadata: (conv.metadata as Record<string, unknown>) ?? {},
+        lastMessageAt: conv.last_message_at,
+      }),
+    { maxAttempts: 3, initialDelayMs: 1000, isRetryable: isRetryableHttpError },
+  ).catch((err) => {
+    log.warn({ err, conversationId: conv.id }, 'Conversation sync to Supabase failed after retries (non-fatal)');
   });
 
   return conv;

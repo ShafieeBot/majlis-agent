@@ -183,6 +183,52 @@ export async function syncConversation(payload: SyncConversationPayload): Promis
   await apiRequest<{ conversationId: string }>('POST', '/api/agent/conversations', payload);
 }
 
+// ── Memories ─────────────────────────────────────────────────────────────────
+
+export interface SubmitMemoryPayload {
+  weddingId: string;
+  inviteGroupId: string;
+  message?: string;
+  photo?: { buffer: Buffer; mimeType: string; filename: string };
+}
+
+export interface SubmitMemoryResult {
+  ok: boolean;
+  greeting_stored?: boolean;
+  photo_uploaded?: boolean;
+}
+
+export async function submitMemory(payload: SubmitMemoryPayload): Promise<SubmitMemoryResult> {
+  const formData = new FormData();
+  formData.append('weddingId', payload.weddingId);
+  formData.append('inviteGroupId', payload.inviteGroupId);
+
+  if (payload.message) {
+    formData.append('message', payload.message);
+  }
+
+  if (payload.photo) {
+    const blob = new Blob([payload.photo.buffer], { type: payload.photo.mimeType });
+    formData.append('photo', blob, payload.photo.filename);
+  }
+
+  const res = await fetch(`${getBaseUrl()}/api/agent/memories`, {
+    method: 'POST',
+    headers: {
+      'x-agent-secret': getSecret(),
+      // Do NOT set Content-Type — fetch sets it automatically with the multipart boundary
+    },
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`majlis API POST /api/agent/memories → ${res.status}: ${text}`);
+  }
+
+  return res.json() as Promise<SubmitMemoryResult>;
+}
+
 // ── Heartbeat ──────────────────────────────────────────────────────────────────
 
 export interface StaleTicket {

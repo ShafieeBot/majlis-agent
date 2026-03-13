@@ -3,6 +3,19 @@
  * The agent runner NEVER sees raw platform payloads — only normalised messages.
  */
 
+export interface MediaAttachment {
+  type: 'image';
+  buffer: Buffer;
+  mimeType: string;
+  filename: string;
+  caption?: string;
+}
+
+export interface PendingMediaDownload {
+  mediaId: string;
+  mimeType: string;
+}
+
 export interface NormalisedInboundMessage {
   channel: 'telegram' | 'whatsapp' | 'webchat';
   chatId: string;
@@ -11,6 +24,9 @@ export interface NormalisedInboundMessage {
   text: string;
   timestamp: Date;
   rawPayload: unknown;
+  media?: MediaAttachment;
+  /** Set by adapter when media needs to be downloaded before processing. */
+  _pendingMediaDownload?: PendingMediaDownload;
   metadata: {
     isCommand?: boolean;
     commandArg?: string;

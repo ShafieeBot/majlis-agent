@@ -5,9 +5,11 @@
  * Chat PIN format: 4-digit numeric — shown on invite card, typed into chat to identify
  *
  * Only SHA-256 hashes are stored in the database. Raw values are never persisted.
+ *
+ * GAP-S4 CLOSED: deriveChatPin now uses createHmac instead of createHash.
  */
 
-import { createHash, randomBytes } from 'crypto';
+import { createHash, createHmac, randomBytes } from 'crypto';
 
 const REF_CODE_PREFIX = 'MJLS_';
 const REF_CODE_LENGTH = 6;
@@ -35,16 +37,16 @@ export function isValidRefCode(value: string): boolean {
 
 /**
  * Derive a stable 4-digit chat PIN from a link ID.
- * Uses HMAC-SHA256(secret, linkId) so the same link always produces the same PIN —
- * stable across page loads, screenshots, and shared links.
- * The secret is APP_SECRET (falls back to NEXTAUTH_SECRET or a build-time constant).
+ * GAP-S4 CLOSED: Uses HMAC-SHA256(secret, linkId) — proper keyed hash.
+ * The same link always produces the same PIN — stable across page loads.
  */
 export function deriveChatPin(linkId: string): string {
   const secret = process.env.APP_SECRET ?? process.env.NEXTAUTH_SECRET;
   if (!secret) {
     throw new Error('APP_SECRET (or NEXTAUTH_SECRET) must be set — chat PIN derivation requires a secret key');
   }
-  const hmac = createHash('sha256').update(`${secret}:${linkId}`).digest();
+  // GAP-S4: Use createHmac (proper HMAC) instead of createHash (plain hash)
+  const hmac = createHmac('sha256', secret).update(linkId).digest();
   // Take first 2 bytes → number 0-65535 → map to 1000-9999
   const num = ((hmac[0] << 8) | hmac[1]) % 9000 + 1000;
   return String(num);

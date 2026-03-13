@@ -8,10 +8,14 @@
  * or defaults to Telegram.
  */
 
-import type { NormalisedInboundMessage, NormalisedOutboundMessage, ChannelAdapter } from './types';
+import type { NormalisedInboundMessage, NormalisedOutboundMessage, ChannelAdapter, MediaAttachment } from './types';
+import { TelegramUpdateSchema, WAWebhookPayloadSchema } from './schemas';
+import { createModuleLogger } from '@/lib/logger';
+
+const log = createModuleLogger('gateway');
 
 // Re-export types for convenience
-export type { NormalisedInboundMessage, NormalisedOutboundMessage, ChannelAdapter } from './types';
+export type { NormalisedInboundMessage, NormalisedOutboundMessage, ChannelAdapter, MediaAttachment } from './types';
 // ── Adapter cache (one per channel per cold start) ──
 
 const adapterCache = new Map<string, ChannelAdapter>();
@@ -54,9 +58,23 @@ export async function validateWebhook(request: Request, channel: string = 'teleg
 /**
  * Parse a raw inbound payload into a NormalisedInboundMessage.
  * Returns null if the payload is not processable.
+ *
+ * GAP-I1 CLOSED: Validates payload against zod schema before processing.
  */
 export function parseInbound(rawPayload: unknown, channel: string = 'telegram'): NormalisedInboundMessage | null {
-  return getAdapter(channel).parseInbound(rawPayload);
+  // GAP-I1: Validate payload schema before passing to adapter
+  const schema = channel === 'whatsapp' ? WAWebhookPayloadSchema : TelegramUpdateSchema;
+  const result = schema.safeParse(rawPayload);
+
+  if (!result.success) {
+    log.warn(
+      { channel, errors: result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`) },
+      'Webhook payload failed schema validation',
+    );
+    return null;
+  }
+
+  return getAdapter(channel).parseInbound(result.data);
 }
 
 /**
@@ -64,6 +82,39 @@ export function parseInbound(rawPayload: unknown, channel: string = 'telegram'):
  */
 export async function sendMessage(msg: NormalisedOutboundMessage): Promise<{ messageId: string }> {
   return getAdapter(msg.channel).sendMessage(msg);
+}
+
+/**
+ * Download media from a pending media download.
+ * Resolves the _pendingMediaDownload metadata into a MediaAttachment on the message.
+ */
+export async function resolveMedia(msg: NormalisedInboundMessage): Promise<NormalisedInboundMessage> {
+  if (!msg._pendingMediaDownload) return msg;
+
+  const { mediaId } = msg._pendingMediaDownload;
+
+  try {
+    if (msg.channel === 'whatsapp') {
+      const { WhatsAppAdapter } = require('./whatsapp');
+      const adapter = getAdapter('whatsapp') as InstanceType<typeof WhatsAppAdapter>;
+      const { buffer, mimeType } = await adapter.downloadMedia(mediaId);
+
+      const ext = mimeType.split('/')[1]?.replace('jpeg', 'jpg') || 'jpg';
+      const media: MediaAttachment = {
+        type: 'image',
+        buffer,
+        mimeType,
+        filename: `photo_${Date.now()}.${ext}`,
+        caption: msg.text !== '[photo]' ? msg.text : undefined,
+      };
+
+      return { ...msg, media, _pendingMediaDownload: undefined };
+    }
+  } catch (err) {
+    log.error({ err, channel: msg.channel }, 'Failed to download media');
+  }
+
+  return msg;
 }
 
 /**

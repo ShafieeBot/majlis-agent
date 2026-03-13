@@ -6,7 +6,7 @@
  */
 
 import { z } from 'zod';
-import { upsertRsvp, createTicket } from '@/lib/api-client';
+import { upsertRsvp, createTicket, submitMemory } from '@/lib/api-client';
 import { createNote } from '../memory/notes-manager';
 import type { ToolDefinition, ToolContext } from './types';
 
@@ -166,6 +166,57 @@ const saveAgentNote: ToolDefinition = {
   },
 };
 
+// ── MEMORY Tools ──
+
+const submitPhoto: ToolDefinition = {
+  name: 'submit_photo',
+  description:
+    'Submit the photo the guest just sent as a memory for the wedding. Only call this when the guest has sent a photo and you want to save it to the memories gallery. The photo is automatically taken from the current message — you do not need to provide it.',
+  inputSchema: z.object({}),
+  sideEffect: 'write',
+  requiresScope: { weddingId: true, inviteGroupId: true },
+  async execute(_input: unknown, ctx: ToolContext) {
+    if (!ctx.inviteGroupId) return { error: 'No invite group in context' };
+    if (!ctx.pendingMedia) return { error: 'No photo attached to current message' };
+
+    const result = await submitMemory({
+      weddingId: ctx.weddingId,
+      inviteGroupId: ctx.inviteGroupId,
+      photo: {
+        buffer: ctx.pendingMedia.buffer,
+        mimeType: ctx.pendingMedia.mimeType,
+        filename: ctx.pendingMedia.filename,
+      },
+    });
+
+    return { success: result.ok, photo_uploaded: result.photo_uploaded };
+  },
+};
+
+const submitGreeting: ToolDefinition = {
+  name: 'submit_greeting',
+  description:
+    'Submit a greeting message from the guest for the wedding memories. Use this when the guest provides a greeting/wish for the bride and groom. Note: each guest can only have one greeting — calling this again will update the previous one.',
+  inputSchema: z.object({
+    message: z.string().describe('The greeting message from the guest for the bride and groom'),
+  }),
+  sideEffect: 'write',
+  requiresScope: { weddingId: true, inviteGroupId: true },
+  async execute(input: unknown, ctx: ToolContext) {
+    if (!ctx.inviteGroupId) return { error: 'No invite group in context' };
+
+    const { message } = input as { message: string };
+
+    const result = await submitMemory({
+      weddingId: ctx.weddingId,
+      inviteGroupId: ctx.inviteGroupId,
+      message,
+    });
+
+    return { success: result.ok, greeting_stored: result.greeting_stored };
+  },
+};
+
 // ── Registry ──
 
 export const ALL_TOOLS: ToolDefinition[] = [
@@ -175,6 +226,8 @@ export const ALL_TOOLS: ToolDefinition[] = [
   createExceptionTicket,
   updateRsvp,
   saveAgentNote,
+  submitPhoto,
+  submitGreeting,
 ];
 
 /**

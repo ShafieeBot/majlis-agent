@@ -4,6 +4,7 @@
 
 import { z } from 'zod';
 import type { ToolSideEffect, AgentContext } from '../types';
+import type { MediaAttachment } from '../gateway/types';
 
 export interface ToolDefinition {
   name: string;
@@ -22,6 +23,7 @@ export interface ToolContext {
   inviteGroupId?: string;
   conversationId: string;
   agentContext?: AgentContext;
+  pendingMedia?: MediaAttachment;
 }
 
 /**

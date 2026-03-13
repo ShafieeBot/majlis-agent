@@ -21,6 +21,7 @@ interface WATextMessage {
   timestamp: string;
   type: string;
   text?: { body: string };
+  image?: { id: string; mime_type: string; sha256?: string; caption?: string };
 }
 
 interface WAValue {
@@ -106,7 +107,25 @@ export class WhatsAppAdapter implements ChannelAdapter {
     const contact = value.contacts?.[0];
     const senderName = contact?.profile?.name;
 
-    // Handle non-text message types (image, video, audio, document, sticker, location, etc.)
+    // Handle image messages
+    if (msg.type === 'image' && msg.image) {
+      return {
+        channel: 'whatsapp',
+        chatId: msg.from,
+        senderId: msg.from,
+        senderName,
+        text: msg.image.caption || '[photo]',
+        timestamp: new Date(parseInt(msg.timestamp, 10) * 1000),
+        rawPayload,
+        _pendingMediaDownload: {
+          mediaId: msg.image.id,
+          mimeType: msg.image.mime_type,
+        },
+        metadata: {},
+      };
+    }
+
+    // Handle non-text, non-image message types (video, audio, document, sticker, location, etc.)
     if (msg.type !== 'text') {
       return {
         channel: 'whatsapp',
@@ -132,6 +151,40 @@ export class WhatsAppAdapter implements ChannelAdapter {
       timestamp: new Date(parseInt(msg.timestamp, 10) * 1000),
       rawPayload,
       metadata: {},
+    };
+  }
+
+  /**
+   * Download media from the WhatsApp Cloud API.
+   * Step 1: GET /mediaId to get the download URL.
+   * Step 2: GET the download URL to get the binary.
+   */
+  async downloadMedia(mediaId: string): Promise<{ buffer: Buffer; mimeType: string }> {
+    // Step 1: Get media URL
+    const metaRes = await fetch(`https://graph.facebook.com/v21.0/${mediaId}`, {
+      headers: { Authorization: `Bearer ${this.accessToken}` },
+    });
+
+    if (!metaRes.ok) {
+      const errBody = await metaRes.text();
+      throw new Error(`WhatsApp media metadata failed ${metaRes.status}: ${errBody}`);
+    }
+
+    const metaData = (await metaRes.json()) as { url: string; mime_type: string };
+
+    // Step 2: Download the binary
+    const downloadRes = await fetch(metaData.url, {
+      headers: { Authorization: `Bearer ${this.accessToken}` },
+    });
+
+    if (!downloadRes.ok) {
+      throw new Error(`WhatsApp media download failed ${downloadRes.status}`);
+    }
+
+    const arrayBuffer = await downloadRes.arrayBuffer();
+    return {
+      buffer: Buffer.from(arrayBuffer),
+      mimeType: metaData.mime_type,
     };
   }
 

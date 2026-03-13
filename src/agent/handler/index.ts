@@ -22,7 +22,7 @@ import { agentLoop } from '../loop';
 import { loadAgentContext } from '../memory/context-loader';
 import { ALL_TOOLS } from '../skills/registry';
 import { resolveAvailableTools } from '../skills/policy';
-import { sendMessage } from '../gateway';
+import { sendMessage, resolveMedia } from '../gateway';
 import type { RoutedContext, ChatMessage, AgentContext, MessageIntent } from '../types';
 import type { ToolContext } from '../skills/types';
 import type { NormalisedInboundMessage } from '../gateway/types';
@@ -58,10 +58,13 @@ export async function handleIncomingMessage(
 
   // Handle unsupported content
   if (msg.text === '[unsupported_content]') {
-    const reply = 'Maaf, saya hanya boleh menerima mesej teks buat masa ini. 🙏';
+    const reply = 'Maaf, saya hanya boleh menerima mesej teks dan gambar buat masa ini. 🙏';
     await doSend(conversation.id, reply, 'GENERAL', msg.channel, msg.chatId);
     return { responseText: reply, status: 'SENT', intent: 'GENERAL' };
   }
+
+  // Step 1b: Resolve pending media downloads (e.g., WhatsApp images)
+  const resolved = await resolveMedia(msg);
 
   // Step 2: Load full context
   let context: AgentContext;
@@ -99,8 +102,16 @@ export async function handleIncomingMessage(
     }
   }
 
-  // Add current message
-  messages.push({ role: 'user', content: msg.text });
+  // Add current message (with media context if present)
+  if (resolved.media) {
+    const caption = resolved.media.caption ? `Caption: "${resolved.media.caption}"` : 'No caption provided.';
+    messages.push({
+      role: 'user',
+      content: `[Guest sent a photo. ${caption}]\n\n${resolved.media.caption || ''}`.trim(),
+    });
+  } else {
+    messages.push({ role: 'user', content: msg.text });
+  }
 
   // Step 6: Run agent loop
   const toolContext: ToolContext = {
@@ -108,6 +119,7 @@ export async function handleIncomingMessage(
     inviteGroupId,
     conversationId: conversation.id,
     agentContext: context,
+    pendingMedia: resolved.media,
   };
 
   const loopResult = await agentLoop(messages, availableTools, toolContext, weddingId);

@@ -1,22 +1,36 @@
 /**
  * Agent Loop — Multi-turn tool-use loop.
  *
- * Receives system prompt + messages, iterates up to MAX_ITERATIONS,
- * executing tools and feeding results back to the LLM until it
- * produces a final text response.
+ * GAP-L1 CLOSED: Error messages in ticket details are sanitized.
+ * GAP-L2 CLOSED: Uses structured pino logger.
+ * GAP-O2 CLOSED: Sentry captures LLM and tool execution errors.
  */
 
 import { chatCompletion } from './llm-client';
 import { createTicket } from '@/lib/api-client';
 import { getToolByName } from '../skills/registry';
+import { createModuleLogger } from '@/lib/logger';
+import { captureException } from '@/lib/sentry';
 import type { ChatMessage, ToolCall } from '../types';
 import type { ToolDefinition, ToolContext } from '../skills/types';
 
+const log = createModuleLogger('loop');
 const MAX_ITERATIONS = 10;
 
 export interface AgentLoopResult {
   responseText: string;
   toolCallsMade: number;
+}
+
+// GAP-L1 CLOSED: Sanitize error details before sending to external systems
+function sanitizeError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  // Strip API keys, tokens, and URLs with credentials
+  return msg
+    .replace(/sk-[a-zA-Z0-9_-]+/g, '[API_KEY_REDACTED]')
+    .replace(/Bearer [a-zA-Z0-9_.-]+/g, 'Bearer [REDACTED]')
+    .replace(/x-api-key:\s*\S+/gi, 'x-api-key: [REDACTED]')
+    .slice(0, 500); // Limit error length
 }
 
 /**
@@ -41,16 +55,17 @@ export async function agentLoop(
         maxTokens: 1024,
       });
     } catch (err) {
-      console.error('LLM call failed:', err);
+      log.error({ err, weddingId, iteration }, 'LLM call failed');
+      captureException(err, { weddingId, iteration, phase: 'llm_call' });
 
-      // Create exception ticket via majlis API
+      // GAP-L1: Sanitize error before putting in ticket details
       await createTicket({
         weddingId,
         conversationId: toolContext.conversationId,
         inviteGroupId: toolContext.inviteGroupId || null,
         type: 'SYSTEM_ERROR',
-        details: { error: String(err), iteration },
-      }).catch((ticketErr) => console.error('Failed to create system error ticket:', ticketErr));
+        details: { error: sanitizeError(err), iteration },
+      }).catch((ticketErr) => log.error({ err: ticketErr }, 'Failed to create system error ticket'));
 
       return {
         responseText: 'Maaf, sistem sedang sibuk. Kami akan membalas segera. 🙏',
@@ -82,7 +97,7 @@ export async function agentLoop(
         // Check if tool is in available set
         const isAvailable = availableTools.some((t) => t.name === tool.name);
         if (!isAvailable) {
-          console.warn(`[Loop] Tool ${tool.name} blocked by policy`);
+          log.warn({ tool: tool.name }, 'Tool blocked by policy');
           messages.push({
             role: 'tool',
             content: JSON.stringify({ error: 'Tool is not available due to policy restrictions' }),
@@ -105,7 +120,7 @@ export async function agentLoop(
           const duration = Date.now() - startTime;
           toolCallsMade++;
 
-          console.log(`[Loop] Tool ${tool.name} executed in ${duration}ms`);
+          log.info({ tool: tool.name, duration }, 'Tool executed');
 
           messages.push({
             role: 'tool',
@@ -115,17 +130,18 @@ export async function agentLoop(
         } catch (err) {
           const duration = Date.now() - startTime;
           toolCallsMade++;
-          console.error(`[Loop] Tool ${tool.name} failed in ${duration}ms:`, err);
+          log.error({ err, tool: tool.name, duration }, 'Tool execution failed');
+          captureException(err, { tool: tool.name, weddingId, phase: 'tool_execution' });
 
           messages.push({
             role: 'tool',
-            content: JSON.stringify({ error: `Tool execution failed: ${String(err)}` }),
+            content: JSON.stringify({ error: `Tool execution failed: ${sanitizeError(err)}` }),
             tool_call_id: toolCall.id,
           });
         }
       }
 
-      continue; // Go back to LLM with tool results
+      continue;
     }
 
     // LLM returned text content (final response)
@@ -143,3 +159,5 @@ export async function agentLoop(
     toolCallsMade,
   };
 }
+
+export { sanitizeError };

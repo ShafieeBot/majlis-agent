@@ -61,7 +61,42 @@ export function getDb(): Database.Database {
 
     CREATE INDEX IF NOT EXISTS idx_memory_wedding
       ON agent_memory(wedding_id, invite_group_id, note_type);
+
+    -- GAP-L3 CLOSED: Audit log table for admin operations
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id              TEXT PRIMARY KEY,
+      action          TEXT NOT NULL,
+      actor           TEXT NOT NULL,
+      target_type     TEXT NOT NULL,
+      target_id       TEXT NOT NULL,
+      metadata        TEXT DEFAULT '{}',
+      ip_address      TEXT,
+      created_at      TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_audit_log_created
+      ON audit_log(created_at);
+
+    -- GAP-A4 CLOSED: Global PIN attempt tracking table
+    CREATE TABLE IF NOT EXISTS pin_attempts (
+      id              TEXT PRIMARY KEY,
+      identifier      TEXT NOT NULL,
+      attempted_at    TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_pin_attempts_identifier
+      ON pin_attempts(identifier, attempted_at);
   `);
 
   return _db;
+}
+
+/**
+ * Reset the DB singleton. Used in tests only.
+ */
+export function _resetDb(): void {
+  if (_db) {
+    _db.close();
+    _db = null;
+  }
 }
